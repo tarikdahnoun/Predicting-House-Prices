@@ -1,0 +1,349 @@
+# Chapter 2
+# Machine Learning and Plotting
+import jupyter
+import numpy as np
+import pandas as pd
+from pandas.plotting import scatter_matrix
+import matplotlib.pyplot as plt
+import sklearn
+from sklearn import model_selection
+from sklearn.model_selection import StratifiedShuffleSplit
+from sklearn.preprocessing import Imputer
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import CategoricalEncoder
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.pipeline import FeatureUnion
+from sklearn.pipeline import make_union
+from sklearn.linear_model import LinearRegression
+
+
+# Fetching Data
+import os
+import tarfile
+from six.moves import urllib
+
+
+DOWNLOAD_ROOT = "https://raw.githubusercontent.com/ageron/handson-ml/master/"  # Data file
+HOUSING_PATH = os.path.join("datasets", "housing")
+HOUSING_URL = DOWNLOAD_ROOT + "datasets/housing/housing.tgz"
+np.random.seed(42)
+
+# Data fetching using tarfile
+def fetch_housing_data(housing_url=HOUSING_URL, housing_path=HOUSING_PATH):
+    if not os.path.isdir(housing_path):
+        os.makedirs(housing_path)
+    tgz_path = os.path.join(housing_path, "housing.tgz")
+    urllib.request.urlretrieve(housing_url, tgz_path)
+    housing_tgz = tarfile.open(tgz_path)
+    housing_tgz.extractall(path=housing_path)
+    housing_tgz.close()
+
+
+# Data fetching using Pandas
+def load_housing_data(housing_path=HOUSING_PATH):
+    csv_path = os.path.join(housing_path, "housing.csv")
+    return pd.read_csv(csv_path)
+
+
+#Fetch and Load Data
+fetch_housing_data()
+housing = load_housing_data()
+
+# View data: 20640 housing values (small for ML)
+# print(housing.head())
+# Notice total_bedrooms only has 20433 values. Something important to look at later.
+# housing.info()
+# Notice that ocean_proximity is an object, not a float number. It is actually text. What does it contain?
+# print(housing["ocean_proximity"].value_counts())
+# Now lets look at the numerical attributes
+# print(housing.describe())
+# To get a better feeling of the data, lets also make the histogram
+# housing.hist(bins=50, figsize=(20, 15))
+# plt.show()
+
+
+# Separating Train, Test Data by randomization
+# def split_train_test(data, test_ratio):
+#     shuffled_indices = np.random.permutation(len(data))
+#     test_set_size = int(len(data)*test_ratio)
+#     test_indices = shuffled_indices[:test_set_size]
+#     train_indices = shuffled_indices[test_set_size:]
+#     return data.iloc[train_indices], data.iloc[test_indices]
+#
+#
+# # Using a 20% testing ratio
+# train_set, test_set = split_train_test(housing, 0.2)
+# print("Training Size: ", len(train_set), "    Testing Size: ", len(test_set))
+
+# Using Scikit's randomization split
+# train_set, test_set = sklearn.model_selection.train_test_split(housing, test_size=.2, random_state=42)
+
+# Using Scikit's stratified sampling
+housing["income_cat"] = np.ceil(housing["median_income"] / 1.5)
+housing["income_cat"].where(housing["income_cat"] < 5, 5.0, inplace=True)
+split = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+for train_index, test_index in split.split(housing, housing["income_cat"]):
+    strat_train_set = housing.loc[train_index]
+    strat_test_set = housing.loc[test_index]
+
+# Checking if it worked
+# print(strat_test_set["income_cat"].value_counts() / len(strat_test_set))
+
+for set_ in (strat_train_set, strat_test_set):
+    set_.drop("income_cat", axis=1, inplace=True)
+
+
+# Lets now visualize the data
+housing = strat_train_set.copy()
+
+# Geographical data
+# housing.plot(kind="scatter", x="longitude", y="latitude", alpha=0.4, s=housing["population"]/100, label="population",
+#              figsize=(10, 7), c="median_house_value", cmap=plt.get_cmap("jet"), colorbar=True)
+# plt.legend()
+# plt.show()
+
+# Finding correlations
+
+# Using corr() function
+# corr_matrix = housing.corr()
+# print(corr_matrix)
+
+# Using pandas
+attributes = ["median_house_value", "median_income", "total_rooms", "housing_median_age"]
+# scatter_matrix(housing[attributes], figsize=(12, 8))
+housing.plot(kind="scatter", x="median_income", y="median_house_value", alpha=0.1)
+# plt.show()
+
+# Attribute Combinations
+housing["rooms_per_household"] = housing["total_rooms"] / housing["households"]
+housing["bedrooms_per_room"] = housing["total_bedrooms"] / housing["total_rooms"]
+housing["population_per_household"] = housing["population"] / housing["households"]
+corr_matrix = housing.corr()
+corr_matrix["median_house_value"].sort_values(ascending=False)
+# print(corr_matrix["median_house_value"])
+
+# Data Preparation for ML. Starting from our original dataset
+housing = strat_train_set.drop("median_house_value", axis=1)  # Feature matrix
+housing_labels = strat_train_set["median_house_value"].copy()  # Labelling values
+imputer = SimpleImputer(strategy="median")
+housing_num = housing.drop("ocean_proximity", axis=1)
+imputer.fit(housing_num)
+X = imputer.transform(housing_num)
+housing_tr = pd.DataFrame(X, columns=housing_num.columns)
+
+
+# We need to bring back the ocean_proximity
+housing_cat = housing["ocean_proximity"]
+
+housing_cat_encoded, housing_categories = housing_cat.factorize()
+# # print(housing_cat_encoded, housing_categories)
+encoder = OneHotEncoder()
+housing_cat_1hot = encoder.fit_transform(housing_cat_encoded.reshape(-1, 1))  # reshape for 2d array (x row, 1 col)
+# print(housing_cat_1hot)
+
+# We can perform the previous lines of code using a new function that does the factorization and encoding in one step.
+# cat_encoder = CategoricalEncoder()  # This stub will be removed in 0.21
+# housing_cat_reshaped = housing_cat.values.reshape(-1, 1)
+# housing_cat_1hot = cat_encoder.fit_transform(housing_cat_reshaped)
+
+
+# Making custom Transformer
+rooms_ix, bedrooms_ix, population_ix, household_ix = 3, 4, 5, 6
+
+
+class CombinedAttributesAdder(BaseEstimator, TransformerMixin):
+    def __init__(self, add_bedrooms_per_room=True):
+        self.add_bedrooms_per_room = add_bedrooms_per_room
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X, y=None):
+        rooms_per_household = X[:, rooms_ix] / X[:, household_ix]
+        population_per_household = X[:, population_ix] / X[:, household_ix]
+        if self.add_bedrooms_per_room:
+            bedrooms_per_household = X[:, bedrooms_ix] / X[:, household_ix]
+            return np.c_[X, rooms_per_household, population_per_household, bedrooms_per_household]
+        else:
+            return np.c_[X, rooms_per_household, population_per_household]
+
+# Using sklearn
+# num_pipeline = Pipeline([
+#     ('imputer', Imputer(strategy="median"))
+#     ('attribs_adder', CombinedAttributesAdder()),
+#     ('std_scalar', StandardScaler()),
+# ])
+#
+# housing_num_tr = num_pipeline.fit_transform(housing_num)
+
+
+# We might also want to use pandas
+class DataFrameSelector(BaseEstimator, TransformerMixin):
+    def __init__(self, attribute_names):
+        self.attribute_names = attribute_names
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        return X[self.attribute_names].values
+
+
+num_attribs = list(housing_num)
+cat_attribs = ["ocean_proximity"]
+
+num_pipeline = Pipeline([
+    # ('selector', DataFrameSelector(num_attribs)),
+    ('imputer', Imputer(strategy="median")),
+    ('attribs_adder', CombinedAttributesAdder()),
+    ('std_scalar', StandardScaler()),
+])
+# housing_num_tr = num_pipeline.fit_transform(housing_num)
+# print(housing_num_tr)
+
+from sklearn.preprocessing import OneHotEncoder
+cat_pipeline = Pipeline([
+    ('selector', DataFrameSelector(cat_attribs)),
+    ('cat_encoder', OneHotEncoder()),
+])
+
+
+from sklearn.compose import ColumnTransformer
+
+# Unioning the two pipelines
+full_pipeline = ColumnTransformer([
+        ("num_pipeline", num_pipeline, num_attribs),
+        ("cat_pipeline", OneHotEncoder(), cat_attribs),
+    ])
+housing_prepared = full_pipeline.fit_transform(housing)
+# print(housing_prepared)
+
+
+# Selecting and Training a Model
+# Using Linear Regression
+lin_reg = LinearRegression()
+lin_reg.fit(housing_prepared, housing_labels)
+some_data = housing.iloc[:5]
+some_labels = housing_labels.iloc[:5]
+some_data_prepared = full_pipeline.transform(some_data)
+some_labels = list(some_labels)
+# print("Predictions: ", lin_reg.predict(some_data_prepared))
+# print("Labels: ", list(some_labels))
+# print("Error: ", 100 * abs(list(some_labels) - lin_reg.predict(some_data_prepared)) / lin_reg.predict(some_data_prepared))
+# Based on the error, this method isn't quite good enough
+
+# We can also measure the error based on scikit's mean_squared_error function
+from sklearn.metrics import mean_squared_error
+
+housing_predictions = lin_reg.predict(housing_prepared)
+lin_mse = mean_squared_error(housing_labels, housing_predictions)
+lin_rmse = np.sqrt(lin_mse)
+print(lin_rmse)
+# 68k is actually pretty bad median estimate, since most houses are between 120k and 265k. A result of underfitting
+
+# Lets try a Decision Tree Regressors (Ch 6)
+from sklearn.tree import DecisionTreeRegressor
+
+tree_reg = DecisionTreeRegressor()
+tree_reg.fit(housing_prepared, housing_labels)
+
+housing_predictions = tree_reg.predict(housing_prepared)
+lin_mse = mean_squared_error(housing_labels, housing_predictions)
+lin_rmse = np.sqrt(lin_mse)
+# print(lin_rmse)
+# Zero Error??? Heavy overfitting. Lets see how it does on testing data
+# housingtest = strat_test_set.drop("median_house_value", axis=1)  # Feature matrix
+# housingtest_labels = strat_test_set["median_house_value"].copy()  # Labelling values
+# housingtest_prepared = full_pipeline.fit_transform(housingtest)
+# housing_test = tree_reg.predict(housingtest_prepared)
+# lin_mse = mean_squared_error(housingtest_labels, housing_test)
+# lin_rmseTest = np.sqrt(lin_mse)
+# print(lin_rmseTest)
+# Hella error
+
+
+# So lets try to weaken the power of the DTR using cross validation
+def display_scores(scores):
+    print("Scores: ", scores)
+    print("Mean: ", scores.mean())
+    print("Standard Deviation: ", scores.std())
+
+
+from sklearn.model_selection import cross_val_score
+
+# For DTR
+scores = cross_val_score(tree_reg, housing_prepared, housing_labels,
+                         scoring='neg_mean_squared_error', cv=10)  # 10 crosses
+tree_rsme_scores = np.sqrt(-scores)
+display_scores(tree_rsme_scores)
+
+print()
+# For linear regression
+lin_scores = cross_val_score(lin_reg, housing_prepared, housing_labels,
+                             scoring="neg_mean_squared_error", cv=10)
+lin_rsme_scores = np.sqrt(-lin_scores)
+display_scores(lin_rsme_scores)
+
+print()
+# Lets also try the RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor
+forest_reg = RandomForestRegressor()
+forest_reg.fit(housing_prepared, housing_labels)
+forest_scores = cross_val_score(forest_reg, housing_prepared, housing_labels,
+                                scoring="neg_mean_squared_error", cv=10)  # display_scores(lin_rsme_scores)
+
+forest_rsme_scores = np.sqrt(-forest_scores)
+display_scores(forest_rsme_scores)
+# print(np.average(forest_reg.predict(housing_prepared)))
+# Now thats pretty good
+
+
+# Fine-Tuning
+
+# Using Grid Search
+from sklearn.model_selection import GridSearchCV
+
+param_grid = [
+    {'n_estimators': [3, 10, 30], 'max_features': [2, 4, 6, 8]},
+    {'bootstrap': [False], 'n_estimators': [3, 10], 'max_features': [2, 3, 4]},
+]
+
+forest_reg = RandomForestRegressor()
+
+grid_search = GridSearchCV(forest_reg, param_grid, cv=5,
+                           scoring='neg_mean_squared_error')
+grid_search.fit(housing_prepared, housing_labels)
+print(grid_search.best_params_)
+print(grid_search.best_estimator_)
+cvres = grid_search.cv_results_
+for mean_score, params, in zip(cvres["mean_test_score"], cvres["params"]):
+    print(np.sqrt(-mean_score), params)
+# The book says max_features=8 and n_estimators=30  is the best solution at 49694 RSME
+
+
+# We can also use Randomized Search if there were many more hyperparameters
+
+
+# Ensemble Methods
+# feature_importances = grid_search.best_estimator_.feature_importances_
+# extra_attribs = ["rooms_per_hhold", "pop_per_hhold", "bedrooms_per_room"]
+# cat_encoder = cat_pipeline.named_steps["cat_encoder"]
+# cat_one_hot_attribs = list(cat_encoder.categories)
+# attributes = num_attribs + extra_attribs + cat_one_hot_attribs
+# sorted(zip(feature_importances, attributes), reverse=True)
+
+final_model = grid_search.best_estimator_
+
+X_test = strat_test_set.drop("median_house_value", axis=1)
+y_test = strat_test_set["median_house_value"].copy()
+
+X_test_prepared = full_pipeline.transform(X_test)
+
+final_predictions = final_model.predict(X_test_prepared)
+
+final_mse = mean_squared_error(y_test, final_predictions)
+final_rsme = np.sqrt(final_mse)
+print(final_rsme)
